@@ -146,6 +146,9 @@ class SpgwuCharm(CharmBase):
         s = api.read_namespaced_stateful_set(name=self.app.name, namespace=self.namespace)
         # Add the required volume mounts to the spgwu container spec
         s.spec.template.spec.init_containers.extend(r.add_spgwu_init_containers)
+        s.spec.template.spec.containers[1].security_context = kubernetes.client.V1SecurityContext(
+                capabilities=kubernetes.client.V1Capabilities(add=["NET_ADMIN", "IPC_LOCK"])
+            )
 
         #s.spec.template.spec.containers[1].volume_mounts.extend(r.spgwu_volume_mounts)
         s.spec.template.spec.volumes.extend(r.spgwu_volumes)
@@ -154,12 +157,12 @@ class SpgwuCharm(CharmBase):
                 {
                     "name": "s1u-net",
                     "interface": "s1u-net",
-                    "ips": ["11.1.1.110/24"]
+                    "ips": [ "11.1.1.110/24" ]
                 },
                 {
                     "name": "sgi-net",
                     "interface": "sgi-net",
-                    "ips": ["13.1.1.110/24"]
+                    "ips": [ "13.1.1.110/24" ]
                 }
             ]''',
         }

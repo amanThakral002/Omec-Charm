@@ -13,6 +13,9 @@ build-mme:
 build-spgwc:
 	echo "bundling spgwc charm"
 	cd charm/spgwc && charmcraft pack -v
+build-spgwu:
+	echo "bundling spgwu charm"
+	cd charm/spgwu && charmcraft pack -v
 
 deploy: deploy-hss deploy-mme deploy-spgwc
 
@@ -26,8 +29,11 @@ deploy-mme:
 	cd charm/mme && juju deploy ./mme_ubuntu-20.04-amd64.charm --resource mme-image=amitinfo2k/nucleus-mme:9f86f87
 deploy-spgwc:
 	echo "deploying spgwc charm"
-	cd charm/spgwc && juju deploy juju deploy ./spgwc_ubuntu-20.04-amd64.charm --resource spgwc-image=amitinfo2k/ngic-cp:1.9.0
+	cd charm/spgwc && juju deploy ./spgwc_ubuntu-20.04-amd64.charm --resource spgwc-image=amitinfo2k/ngic-cp:1.9.0
 
+deploy-spgwu:
+	echo "deploying spgwu charm"
+	cd charm/spgwu && juju deploy ./spgwu_ubuntu-20.04-amd64.charm --resource spgwu-image=amitinfo2k/ngic-dp:1.9.0
 cleanup:
 	juju remove-application spgwc
 	juju remove-application mme
