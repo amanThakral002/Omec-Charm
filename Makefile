@@ -23,6 +23,7 @@ os_release	:= $(shell lsb_release -r -s)
 .PHONY: build
 
 deploy_omec: $(M)/system-check $(M)/deploy_omec
+install: $(M)/install
 
 build: build-hss build-mme build-spgwc build-spgwu
 
@@ -83,20 +84,23 @@ $(M)/lxd: | $(M)
 	sudo adduser $$USER lxd
 	lxd init --auto
 	echo "$(tput setaf 2)Successfully installed lxd$(tput sgr0)"
+	touch $@
 
 $(M)/microk8s: | $(M)
 	sudo snap install --classic microk8s --channel=$(MICROK8S_VERSION)
-	sudo usermod -aG microk8s $(whoami)
+	sudo usermod -aG microk8s $$(whoami)
 	sudo microk8s status --wait-ready
 	sudo microk8s enable storage dns ingress multus
 	sudo snap alias microk8s.kubectl kubectl
 	echo "$(tput setaf 2)Successfully installed microk8s$(tput sgr0)"
+	touch $@
 
 $(M)/juju: | $(M)
 	sudo snap install juju --classic --channel=$(JUJU_VERSION)
 	juju bootstrap microk8s micro
 	echo "$(tput setaf 2)Successfully installed juju$(tput sgr0)"
 	echo "$(tput setaf 2)Juju instalation and cluster setup done Done$(tput sgr0)"
+	touch $@
 
 $(M)/install: | $(M)/charmcraft $(M)/lxd $(M)/microk8s $(M)/juju
 
