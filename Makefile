@@ -1,6 +1,28 @@
 SHELL = bash -o pipefail
+BUILD		?= /tmp/build
+MAKEDIR		:= $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
+SCRIPTDIR	:= $(MAKEDIR)/script
+M		?= $(BUILD)/milestones
+
+DOCKER_VERSION	?= 19.03.15
+HELM_VERSION	?= v3.5.4
+
+LXD_VERSION ?= 4.18/stable
+CHARMCRAFT_VERSION ?= latest/stable
+JUJU_VERSION ?= 2.9/stable
+MICROK8S_VERSION ?= 1.21/stable
+
+
+MODEL_NAME ?= omec
+
+cpu_family	:= $(shell lscpu | grep 'CPU family:' | awk '{print $$3}')
+cpu_model	:= $(shell lscpu | grep 'Model:' | awk '{print $$2}')
+os_vendor	:= $(shell lsb_release -i -s)
+os_release	:= $(shell lsb_release -r -s)
 
 .PHONY: build
+
+deploy_omec: $(M)/system-check $(M)/deploy_omec
 
 build: build-hss build-mme build-spgwc build-spgwu
 
@@ -17,8 +39,99 @@ build-spgwu:
 	echo "bundling spgwu charm"
 	cd charm/spgwu && charmcraft pack -v
 
+$(M):
+	mkdir -p $(M)
 
-deploy: deploy-deps deploy-spgwu deploy-hss deploy-mme deploy-spgwc
+$(M)/system-check: | $(M)
+	@if [[ $(cpu_family) -eq 6 ]]; then \
+		if [[ $(cpu_model) -lt 60 ]]; then \
+			echo "FATAL: haswell CPU or newer is required."; \
+			exit 1; \
+		fi \
+	else \
+		echo "FATAL: unsupported CPU family."; \
+		exit 1; \
+	fi
+	@if [[ $(os_vendor) =~ (Ubuntu) ]]; then \
+		if [ "$(os_release)" == "20.04" ]; then \
+			echo "$(os_vendor) $(os_release) is supported and tested."; \
+		elif [ "$(os_release)" \> "20.04" ]; then \
+            echo "WARN: $(os_vendor) $(os_release) has not been tested."; \
+		else \
+            echo "ERR: $(os_vendor) $(os_release) not supported for omec-automation along with charmed operator SDK"; \
+	    exit 1; \
+		fi; \
+		if dpkg --compare-versions 4.15 gt $(shell uname -r); then \
+			echo "FATAL: kernel 4.15 or later is required."; \
+			echo "Please upgrade your kernel by running" \
+			"apt install --install-recommends linux-generic-hwe-$(os_release)"; \
+			exit 1; \
+		fi \
+	else \
+		echo "FAIL: unsupported OS."; \
+		exit 1; \
+	fi
+	touch $@
+
+$(M)/charmcraft: | $(M)
+	sudo snap install charmcraft --classic --channel=$(CHARMCRAFT_VERSION)
+	echo "$(tput setaf 2)Successfully installed chramcraft$(tput sgr0)"
+	touch $@
+
+$(M)/lxd: | $(M)
+	sudo snap install lxd --classic --channel=$(LXD_VERSION)
+	sudo adduser $$USER lxd
+	lxd init --auto
+	echo "$(tput setaf 2)Successfully installed lxd$(tput sgr0)"
+
+$(M)/microk8s: | $(M)
+	sudo snap install --classic microk8s --channel=$(MICROK8S_VERSION)
+	sudo usermod -aG microk8s $(whoami)
+	sudo microk8s status --wait-ready
+	sudo microk8s enable storage dns ingress multus
+	sudo snap alias microk8s.kubectl kubectl
+	echo "$(tput setaf 2)Successfully installed microk8s$(tput sgr0)"
+
+$(M)/juju: | $(M)
+	sudo snap install juju --classic --channel=$(JUJU_VERSION)
+	juju bootstrap microk8s micro
+	echo "$(tput setaf 2)Successfully installed juju$(tput sgr0)"
+	echo "$(tput setaf 2)Juju instalation and cluster setup done Done$(tput sgr0)"
+
+$(M)/install: | $(M)/charmcraft $(M)/lxd $(M)/microk8s $(M)/juju
+
+# UE images includes kernel module, ue_ip.ko
+# which should be built in the exactly same kernel version of the host machine
+$(BUILD)/openairinterface: | $(M)/setup
+	mkdir -p $(BUILD)
+	cd $(BUILD); git clone https://github.com/opencord/openairinterface.git
+
+$(M)/ue-image: | $(M)/k8s-ready $(BUILD)/openairinterface
+	cd $(BUILD)/openairinterface; \
+	sudo docker build . --target lte-uesoftmodem \
+		--build-arg build_base=omecproject/oai-base:1.1.0 \
+		--file Dockerfile.ue \
+		--tag omecproject/lte-uesoftmodem:1.1.0
+	touch $@
+
+$(M)/oaisim: | $(M)/ue-image $(M)/deploy_omec
+	sudo ip addr add 127.0.0.2/8 dev lo || true
+	$(eval mme_iface=$(shell ip -4 route list default | awk -F 'dev' '{ print $$2; exit }' | awk '{ print $$1 }'))
+	helm upgrade --install --namespace $(MODEL_NAME) oaisim cord/oaisim -f $(AIABVALUES) \
+		--set config.enb.networks.s1_mme.interface=$(mme_iface) \
+		--set images.pullPolicy=IfNotPresent
+	kubectl rollout status -n omec statefulset ue
+	@timeout 60s bash -c \
+	"until ip addr show oip1 | grep -q inet; \
+	do \
+		echo 'Waiting for UE 1 gets IP address'; \
+		sleep 3; \
+	done"
+	touch $@
+
+
+$(M)/omec: | $(M)/install /opt/cni/bin/simpleovs /opt/cni/bin/static $(M)/fabric
+deploy_omec: deploy-deps deploy-spgwu deploy-hss deploy-mme deploy-spgwc
 
 deploy-deps:
 	juju add-model omec || true
